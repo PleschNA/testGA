@@ -457,7 +457,7 @@ HAVING revenue_last_month > 0
 ORDER BY revenue_last_month DESC
 LIMIT 5;
 ```
-Задание 5: Расчет WAU скользящим окном в ClickHouse
+# Задание 5: Расчет WAU скользящим окном в ClickHouse
 
 Данный проект содержит SQL-решение для расчета метрики WAU (Weekly Active Users) с использованием скользящего окна в СУБД ClickHouse.
 
