@@ -344,4 +344,104 @@ def apply_markup(zakupka, nacenka):
 2. Неизвестна структура промо и скидок в каждой неделе. Декомпозиция «промо vs структура» — гипотеза на основе косвенных признаков.
 3. Две недели — короткий период для выводов о трендах. Рекомендуется анализировать минимум 4–8 недель подряд.
 
+# Задача 4. SQL-запросы для ClickHouse
+
+## Схема данных
+
+| Таблица | Колонки |
+|---|---|
+| `dwh.products` | `itemid`, `name_ax`, `brand_name_ax`, `category` |
+| `dwh.sales` | `sale_id`, `date`, `itemid`, `qty`, `price` |
+| `dwh.stock` | `date`, `itemid`, `qty` |
+
+## Задача 1. Сводная информация по товарам
+
+Для каждого товара с продажами за последний полный месяц вывести:
+- код товара, название, бренд, категорию,
+- сумму продаж в шт и руб за последний месяц,
+- среднюю цену за последний месяц,
+- средний объём продаж за 3 месяца,
+- разницу между текущим остатком и средним объёмом продаж.
+
+### SQL (ClickHouse)
+
+```sql
+WITH
+    toStartOfMonth(today() - INTERVAL 1 MONTH) AS last_month_start,
+    toStartOfMonth(today()) - INTERVAL 1 DAY   AS last_month_end,
+    toStartOfMonth(today() - INTERVAL 3 MONTH) AS three_month_start
+SELECT
+    p.itemid,
+    p.name_ax,
+    p.brand_name_ax,
+    p.category,
+    sum(s.qty)                        AS sales_qty_month,
+    sum(s.qty * s.price)              AS sales_rub_month,
+    sum(s.qty * s.price) / sum(s.qty) AS avg_price_month,
+    m3.avg_qty_3m,
+    st.stock_current - m3.avg_qty_3m  AS stock_diff
+FROM dwh.sales AS s
+INNER JOIN dwh.products AS p ON p.itemid = s.itemid
+LEFT JOIN (
+    SELECT itemid, qty AS stock_current
+    FROM dwh.stock
+    WHERE date = (SELECT max(date) FROM dwh.stock)
+) AS st ON st.itemid = s.itemid
+LEFT JOIN (
+    SELECT itemid, sum(qty) / 3 AS avg_qty_3m
+    FROM dwh.sales
+    WHERE date >= toStartOfMonth(today() - INTERVAL 3 MONTH)
+      AND date <  toStartOfMonth(today())
+    GROUP BY itemid
+) AS m3 ON m3.itemid = s.itemid
+WHERE s.date >= last_month_start
+  AND s.date <= last_month_end
+GROUP BY p.itemid, p.name_ax, p.brand_name_ax, p.category,
+         m3.avg_qty_3m, st.stock_current
+HAVING sum(s.qty) > 0
+ORDER BY sales_rub_month DESC;
+```
+
+**Пояснения:**
+- Границы месяца определяются **функциями ClickHouse** (`toStartOfMonth`, `INTERVAL`), а не хардкодом.
+- Средняя цена — **средневзвешенная** `SUM(qty*price)/SUM(qty)`.
+- Средний объём за 3 месяца — `SUM(qty)/3`.
+- Текущий остаток — `qty` на последнюю дату в `dwh.stock`.
+- `HAVING sum(s.qty) > 0` — оставляем только товары с продажами за последний месяц.
+
+## Задача 2. Топ-5 брендов по выручке с сравнением
+
+Вывести топ-5 брендов по выручке за последний полный месяц с сравнением с предыдущим.
+
+### SQL (ClickHouse)
+
+```sql
+WITH
+    toStartOfMonth(today() - INTERVAL 1 MONTH) AS last_month_start,
+    toStartOfMonth(today()) - INTERVAL 1 DAY   AS last_month_end,
+    toStartOfMonth(today() - INTERVAL 2 MONTH) AS prev_month_start,
+    toStartOfMonth(today() - INTERVAL 1 MONTH) - INTERVAL 1 DAY AS prev_month_end
+SELECT
+    p.brand_name_ax AS brand_name_ax,
+    sumIf(s.qty * s.price,
+          s.date >= last_month_start AND s.date <= last_month_end) AS revenue_last_month,
+    sumIf(s.qty * s.price,
+          s.date >= prev_month_start AND s.date <= prev_month_end) AS revenue_prev_month,
+    revenue_last_month - revenue_prev_month AS delta_rub,
+    round((revenue_last_month - revenue_prev_month) / revenue_prev_month * 100, 1) AS delta_pct
+FROM dwh.sales AS s
+INNER JOIN dwh.products AS p ON p.itemid = s.itemid
+WHERE s.date >= prev_month_start
+  AND s.date <= last_month_end
+GROUP BY p.brand_name_ax
+HAVING revenue_last_month > 0
+ORDER BY revenue_last_month DESC
+LIMIT 5;
+```
+
+
+
+
+
+
 
